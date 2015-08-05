@@ -21,6 +21,6 @@ spec:
         - containerPort: 2380
         - containerPort: 4001
       - name: dashboard
-        image: raftis/dashboard
+        image: raftis/dashboard:latest
         ports:
         - containerPort: 8080
