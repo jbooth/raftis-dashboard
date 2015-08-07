@@ -101,7 +101,7 @@ func listRCs(w http.ResponseWriter, r *http.Request) {
 }
 
 func launchRaftis(w http.ResponseWriter, r *http.Request) {
-	ns := "raftis"
+	ns := "eplatonov"
 	base := paramWithDefault(r, "base", "cluster0")
 	replicasStr := paramWithDefault(r, "replicas", "9")
 	replicas, err := strconv.Atoi(replicasStr)
@@ -143,7 +143,7 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 							Env: []api.EnvVar {
 								api.EnvVar{
 									Name: "ETCDURL",
-									Value: "http://127.0.0.1:4001",
+									Value: "http://raftis-dashboard:4001",
 								},
 								api.EnvVar{
 									Name: "ETCDBASE",
@@ -226,6 +226,12 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 func getEtcdNode(w http.ResponseWriter, r *http.Request) {
 	etcd := etcd.NewClient([]string{"http://127.0.0.1:4001"})
 	nodePath := r.FormValue("node")
-	resp, err := etcd.Get(nodePath, false, false)
+	recStr := paramWithDefault(r, "recursive", "false")
+	rec, err := strconv.ParseBool(recStr)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	resp, err := etcd.Get(nodePath, false, rec)
 	w.Write([]byte(fmt.Sprintf("resp: %+v err: %s", resp, err)))
 }
