@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/coreos/go-etcd/etcd"
+	"github.com/xuyu/goredis"
 	"k8s.io/kubernetes/pkg/api"
 	kubeclient "k8s.io/kubernetes/pkg/client"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/util"
-	"github.com/coreos/go-etcd/etcd"
 	"log"
 	"net/http"
 	"strconv"
@@ -34,10 +35,12 @@ func main() {
 	http.HandleFunc("/listRCs", listRCs)
 	http.HandleFunc("/getEtcdNode", getEtcdNode)
 	http.HandleFunc("/launchRaftis", launchRaftis)
+	http.HandleFunc("/redisSet", redisSet)
+	http.HandleFunc("/redisGet", redisGet)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func Kubeclient() (* kubeclient.Client, error) {
+func Kubeclient() (*kubeclient.Client, error) {
 	config := &kubeclient.Config{
 		//Host:     "http://10.65.224.102:8080",
 		Host:     "http://172.20.2.3:8080",
@@ -55,7 +58,7 @@ func paramWithDefault(r *http.Request, name string, defValue string) string {
 	return param
 }
 
-func doList(w http.ResponseWriter, r *http.Request, listf func(* kubeclient.Client, string) (interface{}, error)) {
+func doList(w http.ResponseWriter, r *http.Request, listf func(*kubeclient.Client, string) (interface{}, error)) {
 	ns := paramWithDefault(r, "ns", "raftis")
 	client, err := Kubeclient()
 	if err != nil {
@@ -86,6 +89,45 @@ func listServices(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+func redisSet(w http.ResponseWriter, r *http.Request) {
+	cluster := r.FormValue("cluster")
+	key := r.FormValue("key")
+	val := r.FormValue("val")
+	redis, err := goredis.Dial(&goredis.DialConfig{Address: fmt.Sprintf("raftis-%s:%d", cluster, 6379)})
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	err = redis.SimpleSet(key, val)
+	if err != nil {
+		w.Write([]byte("OK"))
+		return
+	} else {
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+}
+
+func redisGet(w http.ResponseWriter, r *http.Request) {
+	cluster := r.FormValue("cluster")
+	key := r.FormValue("key")
+	redis, err := goredis.Dial(&goredis.DialConfig{Address: fmt.Sprintf("raftis-%s:%d", cluster, 6379)})
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	val, err := redis.Get(key)
+	if err != nil {
+		w.Write([]byte(val))
+		return
+	} else {
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+}
+
 func listPods(w http.ResponseWriter, r *http.Request) {
 	pods := func(client *kubeclient.Client, ns string) (interface{}, error) {
 		return client.Pods(ns).List(labels.Everything(), fields.Everything())
@@ -109,7 +151,7 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	mountPath := paramWithDefault(r, "mountPath", "/var/raftis/" + base)
+	mountPath := paramWithDefault(r, "mountPath", "/var/raftis/"+base)
 	client, err := Kubeclient()
 	if err != nil {
 		w.Write([]byte(err.Error()))
@@ -136,25 +178,25 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 				Spec: api.PodSpec{
-					Containers: []api.Container {
-						api.Container {
-							Name: "raftis",
+					Containers: []api.Container{
+						api.Container{
+							Name:  "raftis",
 							Image: "raftis/raftis:latest",
-							Env: []api.EnvVar {
+							Env: []api.EnvVar{
 								api.EnvVar{
-									Name: "ETCDURL",
+									Name:  "ETCDURL",
 									Value: "http://raftis-dashboard:4001",
 								},
 								api.EnvVar{
-									Name: "ETCDBASE",
+									Name:  "ETCDBASE",
 									Value: etcdBase,
 								},
 								api.EnvVar{
-									Name: "NUMHOSTS",
+									Name:  "NUMHOSTS",
 									Value: replicasStr,
 								},
 							},
-							Ports: []api.ContainerPort {
+							Ports: []api.ContainerPort{
 								api.ContainerPort{
 									ContainerPort: 1103,
 								},
@@ -162,15 +204,15 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 									ContainerPort: 6379,
 								},
 							},
-							VolumeMounts: []api.VolumeMount {
+							VolumeMounts: []api.VolumeMount{
 								api.VolumeMount{
 									MountPath: mountPath,
-									Name: "data",
+									Name:      "data",
 								},
 							},
 						},
 					},
-					Volumes: []api.Volume {
+					Volumes: []api.Volume{
 						api.Volume{
 							Name: "data",
 						},
@@ -196,8 +238,8 @@ func launchRaftis(w http.ResponseWriter, r *http.Request) {
 			Type: api.ServiceTypeLoadBalancer,
 			Ports: []api.ServicePort{
 				api.ServicePort{
-					Name: "raftis",
-					Port: 6379,
+					Name:       "raftis",
+					Port:       6379,
 					TargetPort: util.NewIntOrStringFromInt(6379),
 				},
 			},
