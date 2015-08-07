@@ -3,13 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	kubeclient "github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/api"
+	kubeclient "k8s.io/kubernetes/pkg/client"
+	"k8s.io/kubernetes/pkg/fields"
+	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 var ()
@@ -17,30 +19,42 @@ var ()
 func main() {
 	//client := etcd.NewClient([]string{"http://127.0.0.1:4001"})
 	http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello world")
+		body := `
+			<H1>Hello world!!!</H1>
+			<a href="listServices">list services</a>
+			<a href="listPods">list pods</a>
+			<a href="launchRaftis?replicas=9&mountPath=/var/raftis">launch raftis (9 hosts)</a>
+		`
+		w.Write([]byte(body))
 	})
 	http.HandleFunc("/listPods", listPods)
+	http.HandleFunc("/listServices", listServices)
 	http.HandleFunc("/getEtcdNode", getEtcdNode)
+	http.HandleFunc("/launchRaftis", launchRaftis)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func listPods(w http.ResponseWriter, r *http.Request) {
+func Kubeclient() (* kubeclient.Client, error) {
 	config := &kubeclient.Config{
 		//Host:     "http://10.65.224.102:8080",
 		Host:     "http://172.20.2.3:8080",
 		Username: "jabooth",
 	}
-	client, err := kubeclient.New(config)
+	return kubeclient.New(config)
+}
+
+func doList(w http.ResponseWriter, r *http.Request, listf func(* kubeclient.Client) (interface{}, error)) {
+	client, err := Kubeclient()
 	if err != nil {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	pods, err := client.Pods(api.NamespaceDefault).List(labels.Everything(), fields.Everything())
+	list, err := listf(client)
 	if err != nil {
 		w.Write([]byte(err.Error()))
 		return
 	}
-	json, err := json.Marshal(pods)
+	json, err := json.Marshal(list)
 	if err != nil {
 		w.Write([]byte(err.Error()))
 		return
@@ -49,7 +63,137 @@ func listPods(w http.ResponseWriter, r *http.Request) {
 	w.Write(json)
 
 	return
+}
 
+func listServices(w http.ResponseWriter, r *http.Request) {
+	svs := func(client *kubeclient.Client) (interface{}, error) {
+		return client.Services(api.NamespaceDefault).List(labels.Everything())
+	}
+	doList(w, r, svs)
+	return
+}
+
+func launchRaftis(w http.ResponseWriter, r *http.Request) {
+	replicasStr := r.FormValue("replicas")
+	replicas, err := strconv.Atoi(replicasStr)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	mountPath := r.FormValue("mountPath")
+	client, err := Kubeclient()
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	requestController := &api.ReplicationController{
+		ObjectMeta: api.ObjectMeta{
+			Name: "raftis",
+			Labels: map[string]string{
+				"name": "raftis",
+			},
+		},
+		Spec: api.ReplicationControllerSpec{
+			Replicas: replicas,
+			Selector: map[string]string{
+				"name": "raftis",
+			},
+			Template: &api.PodTemplateSpec{
+				ObjectMeta: api.ObjectMeta{
+					Labels: map[string]string{
+						"name": "raftis",
+					},
+				},
+				Spec: api.PodSpec{
+					Containers: []api.Container {
+						api.Container {
+							Name: "raftis",
+							Image: "raftis/raftis:latest",
+							Env: []api.EnvVar {
+								api.EnvVar{
+									Name: "ETCDURL",
+									Value: "http://127.0.0.1:4001",
+								},
+								api.EnvVar{
+									Name: "NUMHOSTS",
+									Value: replicasStr,
+								},
+							},
+							Ports: []api.ContainerPort {
+								api.ContainerPort{
+									ContainerPort: 1103,
+								},
+								api.ContainerPort{
+									ContainerPort: 6379,
+								},
+							},
+							VolumeMounts: []api.VolumeMount {
+								api.VolumeMount{
+									MountPath: mountPath,
+									Name: "data",
+								},
+							},
+						},
+					},
+					Volumes: []api.Volume {
+						api.Volume{
+							Name: "data",
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err = client.ReplicationControllers(api.NamespaceDefault).Create(requestController)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	raftisSvc := &api.Service{
+		ObjectMeta: api.ObjectMeta{
+			Name: "raftis",
+			Labels: map[string]string{
+				"name": "raftis",
+			},
+		},
+		Spec: api.ServiceSpec{
+			Type: api.ServiceTypeLoadBalancer,
+			Ports: []api.ServicePort{
+				api.ServicePort{
+					Name: "raftis",
+					Port: 6379,
+					TargetPort: util.NewIntOrStringFromInt(6379),
+				},
+			},
+			Selector: map[string]string{
+				"name": "raftis",
+			},
+		},
+	}
+
+	svc, err := client.Services(api.NamespaceDefault).Create(raftisSvc)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+
+	json, err := json.Marshal(svc)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
+	}
+	w.Header().Add("Content-Type", "application/json")
+	w.Write(json)
+	return
+}
+
+func listPods(w http.ResponseWriter, r *http.Request) {
+	pods := func(client *kubeclient.Client) (interface{}, error) {
+		return client.Pods(api.NamespaceDefault).List(labels.Everything(), fields.Everything())
+	}
+	doList(w, r, pods)
 }
 
 func getEtcdNode(w http.ResponseWriter, r *http.Request) {
