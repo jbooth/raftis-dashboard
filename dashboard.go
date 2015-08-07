@@ -100,13 +100,11 @@ func redisSet(w http.ResponseWriter, r *http.Request) {
 	}
 	err = redis.SimpleSet(key, val)
 	if err != nil {
-		w.Write([]byte("OK"))
-		return
-	} else {
 		w.Write([]byte(err.Error()))
 		return
 	}
-
+	w.Write([]byte("OK"))
+	return
 }
 
 func redisGet(w http.ResponseWriter, r *http.Request) {
@@ -119,13 +117,11 @@ func redisGet(w http.ResponseWriter, r *http.Request) {
 	}
 	val, err := redis.Get(key)
 	if err != nil {
-		w.Write([]byte(val))
-		return
-	} else {
 		w.Write([]byte(err.Error()))
 		return
 	}
-
+	w.Write([]byte(val))
+	return
 }
 
 func listPods(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +139,7 @@ func listRCs(w http.ResponseWriter, r *http.Request) {
 }
 
 func launchRaftis(w http.ResponseWriter, r *http.Request) {
-	ns := "eplatonov"
+	ns := "jabooth"
 	base := paramWithDefault(r, "base", "cluster0")
 	replicasStr := paramWithDefault(r, "replicas", "9")
 	replicas, err := strconv.Atoi(replicasStr)
